@@ -1,11 +1,11 @@
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export DATA_DIR='/SkyRL-SQL-653-data'
-DB_PATH=/data
-BASE_MODEL='Qwen/Qwen2.5-Coder-7B-Instruct'
-CKPT_PATH='/mnt/local_storage/ckpt'
+export CUDA_VISIBLE_DEVICES=1,2,6,7
+export DATA_DIR='/dfs/scratch0/lansong/SkyRL/data/SkyRL-SQL-653-data'
+DB_PATH='/dfs/scratch0/lansong/SkyRL/data/'
+BASE_MODEL='Qwen/Qwen2.5-1.5B-Instruct'
+CKPT_PATH='/dfs/scratch0/lansong/models/'
 
 PROJECT_NAME='MultiTurn-Experiment'
-EXPERIMENT_NAME="SkyRL-SQL-7B"
+EXPERIMENT_NAME="SkyRL-SQL-1.5B"
 
 KL_LOSS_COEF=0.001
 ENTROPY_COEFF=0
@@ -20,7 +20,7 @@ CLIP_LOW=0.2
 CLIP_HIGH=0.2
 GRAD_CLIP=0.5
 BATCH_SIZE=256
-TP_SIZE=4
+TP_SIZE=2
 
 PYTHONUNBUFFERED=1 uv run --extra sql --isolated --directory . --frozen --env-file .env.sql -m verl.trainer.main_ppo \
     data.train_files=$DATA_DIR/train.parquet \
@@ -64,8 +64,8 @@ PYTHONUNBUFFERED=1 uv run --extra sql --isolated --directory . --frozen --env-fi
     actor_rollout_ref.rollout.sampling_params.temperature=$TEMP \
     actor_rollout_ref.rollout.sampling_params.top_p=$TOPP \
     actor_rollout_ref.actor.masking=true \
-    trainer.logger=['wandb', 'console'] \
-    trainer.n_gpus_per_node=8 \
+    trainer.logger=['wandb'] \
+    trainer.n_gpus_per_node=4 \
     trainer.nnodes=1 \
     trainer.save_freq=5 \
     trainer.test_freq=-1 \
