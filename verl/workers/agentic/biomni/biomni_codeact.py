@@ -57,9 +57,6 @@ chat_template_qwen3_thinking = (
 
 
 
-# ----------------------------------------------------------------------
-# Biomedical runtime – minimal async REST wrapper
-# ----------------------------------------------------------------------
 class BiomniRuntimeClient:
     """Thin async wrapper around server.py endpoints."""
     def __init__(self, base_url: str = "http://localhost:8000"):
@@ -241,9 +238,6 @@ class BiomniCodeActAgent:
         }
 
 
-# ----------------------------------------------------------------------
-# Batch Manager  (close to original CodeActAgentGroup but stripped down)
-# ----------------------------------------------------------------------
 def _left_pad(input_ids: torch.Tensor,
               mask: torch.Tensor,
               pad_token_id: int,
