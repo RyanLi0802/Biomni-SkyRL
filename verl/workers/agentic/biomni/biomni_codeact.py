@@ -120,7 +120,7 @@ class BiomniCodeActAgent:
 
     Parameters
     ----------
-    instruction: str
+    prompt: str
         The initial user prompt / task description.
     runtime: BiomniRuntimeClient
         A *connected* runtime. The agent does NOT own it - caller decides lifespan.
@@ -131,7 +131,7 @@ class BiomniCodeActAgent:
     """
     def __init__(
         self,
-        instruction: str,
+        prompt: str,
         runtime: BiomniRuntimeClient,
         infer_engine,
         tokenizer: PreTrainedTokenizerBase,
@@ -150,7 +150,7 @@ class BiomniCodeActAgent:
         self.prompt_manager = PromptManager(tool_path="verl/workers/agentic/biomni/tool")
 
         # -- conversation memory ------------------------------------------------
-        self.messages = self.prompt_manager.get_initial_messages(instruction)
+        self.messages = self.prompt_manager.get_initial_messages(prompt)
         self.log: List[Dict[str, str]] = []   # optional external logging
 
     # ------------------------------------------------------------------
@@ -208,8 +208,8 @@ class BiomniCodeActAgent:
                 except Exception as e:
                     out = f"[runtime-error] {e}"
                 # feed runtime output back as user message
-                self.messages.append({"role": "user", "content": out})
-                self.log.append({"role": "user", "content": out})
+                self.messages.append({"role": "user", "content": f"<observation>{out}</observation>"})
+                self.log.append({"role": "user", "content": f"<observation>{out}</observation>"})
                 continue
 
             # optional <think> branch – do nothing but continue
@@ -274,7 +274,7 @@ class BiomniCodeActAgentGroup:
     """
     Generate num_trajectories rollouts for each DataProto item in batch.
 
-    Each item in *batch* MUST carry `non_tensor_batch['instruction']`
+    Each item in batch must carry `non_tensor_batch['raw_prompt']`
     (string with the initial task prompt).  Nothing else is required.
     """
     def __init__(
@@ -325,10 +325,10 @@ class BiomniCodeActAgentGroup:
         tasks = []
         results: List[Dict[str, Any]] = []
 
-        async def _run_single(instruction: str):
+        async def _run_single(prompt: str):
             async with sem, BiomniRuntimeClient(self.runtime_url) as rt:
                 agent = BiomniCodeActAgent(
-                    instruction=instruction,
+                    prompt=prompt,
                     runtime=rt,
                     infer_engine=self.engine,
                     tokenizer=self.tok,
@@ -342,7 +342,7 @@ class BiomniCodeActAgentGroup:
 
         # schedule
         for data_item in self.orig_batch:
-            instr = data_item.non_tensor_batch["instruction"]
+            instr = data_item.non_tensor_batch["raw_prompt"]
             for _ in range(self.nt):
                 tasks.append(asyncio.create_task(_run_single(instr)))
 
@@ -386,6 +386,8 @@ class BiomniCodeActAgentGroup:
         rsp_ids = torch.tensor(resp_enc["input_ids"], device=self.device)
         rsp_mask = torch.tensor(resp_enc["attention_mask"], device=self.device)
         rsp_ass_mask = torch.tensor(resp_enc["assistant_masks"], device=self.device)
+        
+        # this is okay, the padding will be removed in training
         rsp_ids = _pad_right(rsp_ids, self.total_len, pad_id)
         rsp_mask = _pad_right(rsp_mask, self.total_len, 0)
         rsp_ass_mask = _pad_right(rsp_ass_mask, self.total_len, 0)
@@ -411,6 +413,8 @@ class BiomniCodeActAgentGroup:
             "solution": [o["solution"] for o in outputs],
             "iterations": [o["iterations"] for o in outputs],
             "messages": [o["messages"] for o in outputs],
+            "instance_id": self.orig_batch.non_tensor_batch["instance_id"].tolist(),
+            "task_name": self.orig_batch.non_tensor_batch["task_name"].tolist(),
         }
 
         return DataProto.from_dict(tensors=batch, non_tensors=non_tensor)
@@ -420,12 +424,13 @@ class BiomniCodeActAgentGroup:
 # convenience CLI ------------------------------------------------------
 if __name__ == "__main__":
     import argparse, json
-    from sglang import Engine   # only for quick smoke test
+    from sglang import Engine
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", required=True)
-    parser.add_argument("--instruction", required=True)
+    parser.add_argument("--prompt", required=True)
+    parser.add_argument("--instance_id", type=int, required=True)
     args = parser.parse_args()
 
     # -- quick demo -----------------------------------------------------
@@ -447,7 +452,7 @@ if __name__ == "__main__":
 
     dummy = DataProto.from_dict(
         tensors={"input_ids": torch.zeros(1, 32768, dtype=torch.long)},
-        non_tensors={"instruction": [args.instruction]},
+        non_tensors={"raw_prompt": [args.prompt], "instance_id": [args.instance_id], "task_name": ["screen_design"]},
     )
     grp = BiomniCodeActAgentGroup(
         batch=dummy,
@@ -460,4 +465,14 @@ if __name__ == "__main__":
     dp = grp.run()
     msg0 = dp.non_tensor_batch["messages"][0].tolist()
     print(json.dumps(msg0, indent=2))
-    print("Input Ids length: ", dp.batch["input_ids"].shape[1])
+    
+    print("="*20)
+    
+    from verl.workers.reward_manager.biomni import BiomniRewardManager
+    reward_manager = BiomniRewardManager(tokenizer=tok, num_examine=1, config={})
+    result_tensor, result_metrics = reward_manager(dp)
+    response_ids = dp.batch['responses']
+    response_length = response_ids.shape[-1]
+    valid_response_length = dp.batch['attention_mask'][:, -response_length:].sum(-1)
+    print(result_metrics)
+    print(result_tensor['all'][0][valid_response_length[0] - 1])
