@@ -138,6 +138,9 @@ class screen_design(base_task):
             # screen_id = input['screen_id']
             screen_id = input
             
+            if not output:
+                return 0.0
+            
             # Parse output to extract gene names
             # Assume output is a comma-separated list of gene symbols
             genes = [gene.strip() for gene in output.split(',')]

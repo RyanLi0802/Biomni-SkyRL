@@ -308,8 +308,30 @@ class BiomniCodeActAgentGroup:
     # public API
     # ------------------------------------------------------------------
     def run(self) -> DataProto:
-        res = asyncio.run(self._async_run_group())
-        return res
+        """
+        Run the async pipeline on the current thread. If there is already a
+        running event loop, we create a fresh one; otherwise we reuse the
+        default loop.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+            # If that loop is already running, we cannot call run_until_complete on it.
+            if loop.is_running():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            # No event loop exists in this thread, so make a brand‐new one.
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        try:
+            return loop.run_until_complete(self._async_run_group())
+        finally:
+            # Any cleanup (if you have open handles, etc.)
+            self.close()
+    
+    def close(self):
+        pass
 
     # ------------------------------------------------------------------
     # asyncio helpers
@@ -390,6 +412,17 @@ class BiomniCodeActAgentGroup:
         input_ids = torch.cat([pr_ids, rsp_ids], dim=1)              # (B, total_len)
         attn_mask = torch.cat([pr_mask, rsp_mask], dim=1)
         pos_ids = compute_position_id_with_mask(attn_mask)
+        
+        # Repeat instance_id and task_name for each trajectory to match the number of outputs
+        orig_instance_ids = self.orig_batch.non_tensor_batch["instance_id"].tolist()
+        orig_task_names = self.orig_batch.non_tensor_batch["task_name"].tolist()
+        
+        # Each original instance generates self.nt trajectories
+        repeated_instance_ids = []
+        repeated_task_names = []
+        for instance_id, task_name in zip(orig_instance_ids, orig_task_names):
+            repeated_instance_ids.extend([instance_id] * self.nt)
+            repeated_task_names.extend([task_name] * self.nt)
 
         batch = TensorDict(
             {
@@ -407,8 +440,8 @@ class BiomniCodeActAgentGroup:
             "solution": [o["solution"] for o in outputs],
             "iterations": [o["iterations"] for o in outputs],
             "messages": [o["messages"] for o in outputs],
-            "instance_id": self.orig_batch.non_tensor_batch["instance_id"].tolist(),
-            "task_name": self.orig_batch.non_tensor_batch["task_name"].tolist(),
+            "instance_id": repeated_instance_ids,
+            "task_name": repeated_task_names,
         }
 
         return DataProto.from_dict(tensors=batch, non_tensors=non_tensor)
