@@ -12,8 +12,9 @@ class BiomniRewardManager:
         self.num_examine = num_examine
         self.config = config
 
+        top_k = config.get("top_k", 100)
         self.task_mapping = {
-            "screen_design": screen_design(),
+            "screen_design": screen_design(top_k=top_k),
         }
 
     def __call__(self, data: DataProto, *, return_dict: bool = False):
