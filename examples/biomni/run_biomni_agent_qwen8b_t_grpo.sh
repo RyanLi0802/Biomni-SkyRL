@@ -3,11 +3,11 @@
 export RAY_RUNTIME_ENV_HOOK=ray._private.runtime_env.uv_runtime_env_hook.hook
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
-PROJECT_NAME='biomni-training-qwen3-8b-ppo'
-EXPERIMENT_NAME='biomni-training-qwen3-8b-32bsz-temp0.6-clip-0.28-32turn-grpo'
+PROJECT_NAME='biomni-training-qwen3-8b-grpo'
+EXPERIMENT_NAME='biomni-training-qwen3-8b-32bsz-temp0.6-clip-0.28-32turn-grpo-reward2'
 DATA_PATH="/afs/cs.stanford.edu/u/lansong/BioAgentOS/biomni_env_screen/data/screen_design_rl"
 SFT_MODEL_PATH='/dfs/scratch0/lansong/models/qwen/qwen3-8b-sft-v1/global_step_66' 
-CKPT_PATH='/dfs/scratch0/lansong/models/qwen'
+CKPT_PATH='/dfs/scratch1/lansong/models/qwen'
 RUNTIME_URL='http://172.24.75.232:8000'
 TASK_TYPE='biomni'
 
@@ -15,7 +15,7 @@ BATCH_SIZE=32
 MAX_NUM_ITERS=32
 NUM_TRAJ=8
 MAX_PARALLEL_AGENTS=128
-SAVE_FREQ=8
+SAVE_FREQ=4
 
 USE_KL_LOSS=True
 KL_LOSS_COEF=0.001

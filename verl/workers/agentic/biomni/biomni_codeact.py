@@ -1,4 +1,4 @@
-import asyncio, re, json, uuid, logging, aiohttp, time, os, tempfile
+import asyncio, re, json, uuid, logging, aiohttp, time, os, tempfile, copy
 import sys
 sys.path.append("/afs/cs.stanford.edu/u/lansong/SkyRL/")
 from collections import deque
@@ -310,6 +310,7 @@ class BiomniCodeActAgent:
     def __init__(
         self,
         prompt: str,
+        instance_id: int,
         runtime: BiomniRuntimeClient,
         infer_engine,
         tokenizer: PreTrainedTokenizerBase,
@@ -322,7 +323,7 @@ class BiomniCodeActAgent:
         self.engine = infer_engine
         self.tok = tokenizer
         self.sampling_params = sampling_params
-        
+        self.instance_id = instance_id
         self.max_prompt_len = max_prompt_len
         self.max_iterations = max_iterations
         self.qwen3_enable_thinking = qwen3_enable_thinking
@@ -569,40 +570,95 @@ class BiomniCodeActAgentGroup:
     # asyncio helpers
     # ------------------------------------------------------------------
     async def _async_run_group(self) -> DataProto:
+        """
+        Launch at most `self.max_parallel` roll-outs concurrently and
+        **return results in canonical (instance, trajectory) order**.
+
+        We attach (batch_idx, traj_idx) to every coroutine so that after
+        `asyncio.gather` we can sort deterministically, no matter which
+        tasks finished first.
+        """
         sem = asyncio.Semaphore(self.max_parallel)
-        tasks = []  # type: List[asyncio.Task]
+        tasks: list[asyncio.Task] = []
 
-        async def _run_single(prompt: str):
-            """Run one trajectory and return its result.
-
-            Returning the result instead of mutating a shared list preserves
-            the original ordering when we later await `asyncio.gather`, which
-            guarantees that the gathered outputs correspond index-wise to the
-            order in which the tasks were created.
-            """
+        async def _run_single(batch_idx: int, traj_idx: int, instance_id: int, prompt: str):
             async with sem, BiomniRuntimeClient(self.runtime_url) as rt:
                 agent = BiomniCodeActAgent(
                     prompt=prompt,
+                    instance_id=instance_id,
                     runtime=rt,
                     infer_engine=self.engine,
                     tokenizer=self.tok,
-                    sampling_params=self.sampling_params,
+                    sampling_params=copy.deepcopy(self.sampling_params),
                     max_prompt_len=self.max_prompt_len,
                     max_iterations=self.max_iters,
                     qwen3_enable_thinking=self.qwen_think,
                 )
-                return await agent.run()
+                result = await agent.run()
+                # **Return the key together with the payload**
+                return (batch_idx, traj_idx, result)
 
-        # schedule
-        for data_item in self.orig_batch:
-            instr = data_item.non_tensor_batch["raw_prompt"]
-            for _ in range(self.nt):
-                tasks.append(asyncio.create_task(_run_single(instr)))
+        # schedule (deterministic order)
+        for batch_idx, data_item in enumerate(self.orig_batch):
+            prompt = data_item.non_tensor_batch["raw_prompt"]
+            instance_id = data_item.non_tensor_batch["instance_id"]
+            for traj_idx in range(self.nt):
+                tasks.append(asyncio.create_task(_run_single(batch_idx, traj_idx, instance_id, prompt)))
 
-        # Gather returns results in the same order as *tasks* were added,
-        # which matches the order of `orig_batch` expansion (deterministic).
-        outputs: List[Dict[str, Any]] = await asyncio.gather(*tasks)
-        return self._pack_results(outputs)
+        # run all tasks
+        gathered: list[tuple[int, int, dict]] = await asyncio.gather(*tasks)
+
+        # --------------------------------------------------------------
+        # Re-order into canonical layout expected by _pack_results
+        # --------------------------------------------------------------
+        # shape: [|batch| * nt] where fast-changing index is trajectory
+        ordered: list[dict] = [None] * len(gathered)      # type: ignore
+        for batch_idx, traj_idx, payload in gathered:
+            ordinal = batch_idx * self.nt + traj_idx      # flat index
+            ordered[ordinal] = payload
+
+        # sanity
+        assert all(x is not None for x in ordered)
+
+        return self._pack_results(ordered)
+    
+    
+    # async def _async_run_group(self) -> DataProto:
+    #     sem = asyncio.Semaphore(self.max_parallel)
+    #     tasks = []  # type: List[asyncio.Task]
+
+    #     async def _run_single(prompt: str, instance_id):
+    #         """Run one trajectory and return its result.
+
+    #         Returning the result instead of mutating a shared list preserves
+    #         the original ordering when we later await `asyncio.gather`, which
+    #         guarantees that the gathered outputs correspond index-wise to the
+    #         order in which the tasks were created.
+    #         """
+    #         async with sem, BiomniRuntimeClient(self.runtime_url) as rt:
+    #             agent = BiomniCodeActAgent(
+    #                 prompt=prompt,
+    #                 instance_id=instance_id,
+    #                 runtime=rt,
+    #                 infer_engine=self.engine,
+    #                 tokenizer=self.tok,
+    #                 sampling_params=self.sampling_params,
+    #                 max_prompt_len=self.max_prompt_len,
+    #                 max_iterations=self.max_iters,
+    #                 qwen3_enable_thinking=self.qwen_think,
+    #             )
+    #             return await agent.run()
+
+    #     # schedule
+    #     for data_item in self.orig_batch:
+    #         instr, instance_id = data_item.non_tensor_batch["raw_prompt"], data_item.non_tensor_batch["instance_id"]
+    #         for _ in range(self.nt):
+    #             tasks.append(asyncio.create_task(_run_single(instr, instance_id)))
+
+    #     # Gather returns results in the same order as *tasks* were added,
+    #     # which matches the order of `orig_batch` expansion (deterministic).
+    #     outputs: List[Dict[str, Any]] = await asyncio.gather(*tasks)
+    #     return self._pack_results(outputs)
 
     # ------------------------------------------------------------------
     # packing into DataProto (same tensor layout as CodeAct) ------------
@@ -610,11 +666,21 @@ class BiomniCodeActAgentGroup:
     def _pack_results(self, outputs: List[Dict[str, Any]]) -> DataProto:
         # 1) split conversation into PROMPT (up to just before first assistant)
         #    and RESPONSE (from first assistant on)
+        # prompts, responses = [], []
+        # for convo in outputs:
+        #     msgs = convo["messages"]
+        #     split_at = next(
+        #         (i for i, m in enumerate(msgs) if m["role"] == "assistant"), len(msgs)
+        #     )
+        #     prompts.append(msgs[:split_at])
+        #     responses.append(msgs[split_at:])
         prompts, responses = [], []
+
         for convo in outputs:
             msgs = convo["messages"]
             split_at = next(
-                (i for i, m in enumerate(msgs) if m["role"] == "assistant"), len(msgs)
+                (i for i, m in enumerate(msgs) if m["role"] == "assistant"),
+                len(msgs),
             )
             prompts.append(msgs[:split_at])
             responses.append(msgs[split_at:])
@@ -681,68 +747,178 @@ class BiomniCodeActAgentGroup:
         return DataProto.from_dict(tensors=batch, non_tensors=non_tensor)
 
 
-# ----------------------------------------------------------------------
-# convenience CLI ------------------------------------------------------
-if __name__ == "__main__":
-    import argparse, json
-    from sglang import Engine
-    from transformers import AutoModelForCausalLM, AutoTokenizer
 
+# if __name__ == "__main__":
+#     import argparse, json
+#     from sglang import Engine
+#     from transformers import AutoModelForCausalLM, AutoTokenizer
+
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument("--model-path", required=True)
+#     parser.add_argument("--raw_prompt", required=False)
+#     parser.add_argument("--instance_id", type=int, required=False)
+#     args = parser.parse_args()
+
+#     eng = Engine(
+#                 model_path=args.model_path,
+#                 port=40000,
+#                 dtype="float16",
+#                 max_total_tokens=60*32768,
+#                 max_prefill_tokens=2*32768,
+#                 enable_memory_saver=True,
+#                 mem_fraction_static=0.4,
+#                 tp_size=4,
+#                 log_level="INFO",
+#                 # enable_metrics=True,
+#             )
+#     tok = AutoTokenizer.from_pretrained(args.model_path)
+#     sampling = {"max_new_tokens": 4096, "temperature": 0.6}
+    
+#     if args.raw_prompt is not None and args.instance_id is not None:
+#             dummy = DataProto.from_dict(
+#                 tensors={"input_ids": torch.zeros(1, 32768, dtype=torch.long)},
+#                 non_tensors={"raw_prompt": [args.raw_prompt], "instance_id": [args.instance_id], "task_name": ["screen_design"]},
+#             )
+#     else:
+#         from verl.workers.agentic.biomni.task.screen_design import screen_design
+#         task = screen_design(top_k=100)
+#         example = task.get_example()
+#         print(example)
+#         dummy = DataProto.from_dict(
+#             tensors={"input_ids": torch.zeros(1, 32768, dtype=torch.long)},
+#             non_tensors={"raw_prompt": [example["prompt"]], "instance_id": [example["screen_id"]], "task_name": ["screen_design"]},
+#         )
+
+#     grp = BiomniCodeActAgentGroup(
+#         batch=dummy,
+#         num_trajectories=1,
+#         infer_engine=eng,
+#         tokenizer=tok,
+#         sampling_params=sampling,
+#         runtime_url="http://172.24.75.232:8000",
+#     )
+#     dp = grp.run()
+#     msg0 = dp.non_tensor_batch["messages"][0].tolist()
+#     print(json.dumps(msg0, indent=2))
+    
+#     print("="*20)
+    
+#     from verl.workers.reward_manager.biomni import BiomniRewardManager
+#     reward_manager = BiomniRewardManager(tokenizer=tok, num_examine=1, config={"top_k": 100})
+#     result_tensor, result_metrics = reward_manager(dp)
+#     response_ids = dp.batch['responses']
+#     response_length = response_ids.shape[-1]
+#     valid_response_length = dp.batch['attention_mask'][:, -response_length:].sum(-1)
+#     print(result_metrics)
+#     print(result_tensor['all'][0][valid_response_length[0] - 1])
+
+
+if __name__ == "__main__":
+    import argparse, json, copy
+    from sglang import Engine
+    from transformers import AutoTokenizer
+    import torch
+
+    from verl.workers.agentic.biomni.task.screen_design import screen_design
+
+    # ------------------------- CLI ----------------------------------
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", required=True)
-    parser.add_argument("--raw_prompt", required=False)
-    parser.add_argument("--instance_id", type=int, required=False)
+    parser.add_argument("--n_instances", type=int, default=3,
+                        help="How many task examples to sample")
+    parser.add_argument("--n_traj", type=int, default=2,
+                        help="Trajectories per instance")
     args = parser.parse_args()
 
+    # -------------------------- engine ------------------------------
     eng = Engine(
-                model_path=args.model_path,
-                port=40000,
-                dtype="float16",
-                max_total_tokens=60*32768,
-                max_prefill_tokens=2*32768,
-                enable_memory_saver=True,
-                mem_fraction_static=0.4,
-                tp_size=4,
-                log_level="INFO",
-                # enable_metrics=True,
-            )
+        model_path=args.model_path,
+        port=40000,
+        dtype="float16",
+        max_total_tokens=60 * 32768,
+        max_prefill_tokens=2 * 32768,
+        enable_memory_saver=True,
+        mem_fraction_static=0.4,
+        tp_size=4,
+        log_level="INFO",
+    )
     tok = AutoTokenizer.from_pretrained(args.model_path)
-    sampling = {"max_new_tokens": 4096, "temperature": 0.6}
-    
-    if args.raw_prompt is not None and args.instance_id is not None:
-            dummy = DataProto.from_dict(
-                tensors={"input_ids": torch.zeros(1, 32768, dtype=torch.long)},
-                non_tensors={"raw_prompt": [args.raw_prompt], "instance_id": [args.instance_id], "task_name": ["screen_design"]},
-            )
-    else:
-        from verl.workers.agentic.biomni.task.screen_design import screen_design
-        task = screen_design(top_k=100)
-        example = task.get_example()
-        print(example)
-        dummy = DataProto.from_dict(
-            tensors={"input_ids": torch.zeros(1, 32768, dtype=torch.long)},
-            non_tensors={"raw_prompt": [example["prompt"]], "instance_id": [example["screen_id"]], "task_name": ["screen_design"]},
-        )
+    base_sampling = {"max_new_tokens": 4096, "temperature": 0.6}
 
+    # --------------------- build real batch -------------------------
+    task = screen_design(top_k=100)
+    examples = [task.get_example() for _ in range(args.n_instances)]
+
+    prompts      = [ex["prompt"]    for ex in examples]
+    instance_ids = [ex["screen_id"] for ex in examples]
+    task_names   = ["screen_design"] * args.n_instances
+
+    batch_dp = DataProto.from_dict(
+        tensors={"input_ids": torch.zeros(len(prompts), 1, dtype=torch.long)},
+        non_tensors={
+            "raw_prompt":  prompts,
+            "instance_id": instance_ids,
+            "task_name":   task_names,
+        },
+    )
+
+    # -------------------- run roll-outs -----------------------------
     grp = BiomniCodeActAgentGroup(
-        batch=dummy,
-        num_trajectories=1,
+        batch=batch_dp,
+        num_trajectories=args.n_traj,
         infer_engine=eng,
         tokenizer=tok,
-        sampling_params=sampling,
+        sampling_params=copy.deepcopy(base_sampling),
         runtime_url="http://172.24.75.232:8000",
     )
     dp = grp.run()
-    msg0 = dp.non_tensor_batch["messages"][0].tolist()
-    print(json.dumps(msg0, indent=2))
-    
-    print("="*20)
-    
-    from verl.workers.reward_manager.biomni import BiomniRewardManager
-    reward_manager = BiomniRewardManager(tokenizer=tok, num_examine=1, config={"top_k": 100})
-    result_tensor, result_metrics = reward_manager(dp)
-    response_ids = dp.batch['responses']
-    response_length = response_ids.shape[-1]
-    valid_response_length = dp.batch['attention_mask'][:, -response_length:].sum(-1)
-    print(result_metrics)
-    print(result_tensor['all'][0][valid_response_length[0] - 1])
+
+    # -------------- pairing + prompt-presence checks ----------------
+    ids_out   = list(dp.non_tensor_batch["instance_id"])
+    msgs_out  = dp.non_tensor_batch["messages"]
+
+    # expected flat order: [id0,id0,...,id1,id1,...]
+    expected_ids = []
+    expected_prompts = []
+    for i, _id in enumerate(instance_ids):
+        expected_ids.extend([_id] * args.n_traj)
+        expected_prompts.extend([prompts[i]] * args.n_traj)
+
+    assert ids_out == expected_ids, (
+        f"✗ instance_id ordering mismatch:\nexpected {expected_ids}\n got      {ids_out}"
+    )
+    assert len(ids_out) == len(msgs_out), "✗ row count mismatch ids vs. messages"
+
+    # prompt must appear in its own row’s conversation **before** first assistant
+    for row_idx, (msg_list, prompt_txt) in enumerate(zip(msgs_out, expected_prompts)):
+        # flatten to quickly search
+        joined = " ".join(m["content"] for m in msg_list)
+        assert prompt_txt in joined, f"✗ prompt missing in row {row_idx}"
+
+        # stronger check: make sure it’s in the *prompt* slice
+        first_assist = next((i for i, m in enumerate(msg_list) if m["role"] == "assistant"), len(msg_list))
+        prompt_slice = " ".join(m["content"] for m in msg_list[:first_assist])
+        assert prompt_txt in prompt_slice, f"✗ prompt appears after assistant in row {row_idx}"
+
+    print("✓ Pairing + prompt-placement tests passed.")
+
+    # # -------------- pretty-print a sample conversation --------------
+    # sample_json = json.dumps(msgs_out[0], indent=2)
+    # print("\n--- first conversation ---")
+    # print(sample_json[:2000] + ("…" if len(sample_json) > 2000 else ""))
+
+    # ---------------- optional reward eval --------------------------
+    try:
+        from verl.workers.reward_manager.biomni import BiomniRewardManager
+
+        reward_manager = BiomniRewardManager(tokenizer=tok, num_examine=1,
+                                             config={"top_k": 100})
+        r_tensor, r_metrics = reward_manager(dp)
+        resp_ids  = dp.batch["responses"]
+        resp_len  = resp_ids.shape[-1]
+        valid_len = dp.batch["attention_mask"][:, -resp_len:].sum(-1)
+        print("\nReward metrics:", r_metrics)
+        first_tokens = [r_tensor["all"][i][valid_len[i] - 1] for i in range(len(valid_len))]
+        print("Reward first tokens:", first_tokens)
+    except ImportError:
+        pass
