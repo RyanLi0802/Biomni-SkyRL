@@ -255,24 +255,53 @@ class BiomniRuntimeClient:
             try:
                 await self._client.post(f"{self.base}/delete_runtime",
                                         json={"session_id": self.session_id})
+            except (aiohttp.ClientOSError, aiohttp.ServerDisconnectedError, aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(f"Failed to delete runtime session {self.session_id}: {e}")
+                # Don't raise here since we're in cleanup
             finally:
                 await self._client.close()
 
     # low-level helpers -------------------------------------------------
     async def _start(self) -> str:
-        async with self._client.post(f"{self.base}/start_runtime") as r:
-            r.raise_for_status()
-            return (await r.json())["session_id"]
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self._client.post(f"{self.base}/start_runtime") as r:
+                    r.raise_for_status()
+                    return (await r.json())["session_id"]
+            except (aiohttp.ClientOSError, aiohttp.ServerDisconnectedError, aiohttp.ClientError) as e:
+                logger.warning(f"Connection error on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt == max_retries - 1:
+                    raise
+                await asyncio.sleep(1.0 * (attempt + 1))  # exponential backoff
+            except asyncio.TimeoutError as e:
+                logger.warning(f"Timeout error on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt == max_retries - 1:
+                    raise
+                await asyncio.sleep(1.0 * (attempt + 1))
 
     async def execute(self, code: str, timeout: int = 600) -> str:
         """Run *code* inside the persistent namespace of this session."""
         payload = {"session_id": self.session_id,
                    "code": code,
                    "timeout_seconds": timeout}
-        async with self._client.post(f"{self.base}/execute", json=payload,
-                                     timeout=timeout+5) as r:
-            r.raise_for_status()
-            return (await r.json())["output"]
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with self._client.post(f"{self.base}/execute", json=payload,
+                                             timeout=timeout+5) as r:
+                    r.raise_for_status()
+                    return (await r.json())["output"]
+            except (aiohttp.ClientOSError, aiohttp.ServerDisconnectedError, aiohttp.ClientError) as e:
+                logger.warning(f"Connection error during execute on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt == max_retries - 1:
+                    raise RuntimeError(f"Failed to execute code after {max_retries} attempts: {e}")
+                await asyncio.sleep(1.0 * (attempt + 1))  # exponential backoff
+            except asyncio.TimeoutError as e:
+                logger.warning(f"Timeout error during execute on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt == max_retries - 1:
+                    raise RuntimeError(f"Code execution timed out after {max_retries} attempts: {e}")
+                await asyncio.sleep(1.0 * (attempt + 1))
 
 
 # ----------------------------------------------------------------------

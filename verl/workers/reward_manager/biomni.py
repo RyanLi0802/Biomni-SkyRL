@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from verl import DataProto
 from verl.workers.agentic.biomni.task.screen_design import screen_design
+from verl.workers.agentic.biomni.task.gwas_causal_gene import gwas_causal_gene
 
 class BiomniRewardManager:
     def __init__(self, tokenizer, num_examine, config, compute_score=None):
@@ -16,6 +17,7 @@ class BiomniRewardManager:
         top_k = config.get("top_k", 100)
         self.task_mapping = {
             "screen_design": screen_design(top_k=top_k),
+            "gwas_causal_gene_pharmaprojects": gwas_causal_gene(path = '/dfs/project/bioagentos/biomni_data/benchmark/', dataset = 'pharmaprojects', num_samples = 100000),
         }
 
     def __call__(self, data: DataProto, *, return_dict: bool = False):
@@ -78,18 +80,26 @@ class BiomniRewardManager:
         for i, L in enumerate(valid_len):
             token_mask[i, int(L.item()) - 1] = rewards[i]
         
+        # Calculate reward means for both return paths
+        gt_reward_mean = torch.tensor(gt_rewards, dtype=torch.float32, device=data.batch["responses"].device).mean().item()
+        ft_reward_mean = torch.tensor(ft_rewards, dtype=torch.float32, device=data.batch["responses"].device).mean().item()
+        
         if return_dict:
             return {
                 "reward_tensor": token_mask,
-                "reward_extra_info": {"raw_score": rewards.cpu().tolist()}
+                "reward_extra_info": {
+                    "raw_score": rewards.cpu().tolist(),
+                    "gt_reward_mean": gt_reward_mean,
+                    "ft_reward_mean": ft_reward_mean
+                }
             }
 
         reward_tensor_dict = {"task_reward": token_mask,
                               "all": token_mask}
         reward_metrics = {
             "task_reward_mean": rewards.mean().item(), 
-            "gt_reward_mean": torch.tensor(gt_rewards, dtype=torch.float32, device=data.batch["responses"].device).mean().item(), 
-            "ft_reward_mean": torch.tensor(ft_rewards, dtype=torch.float32, device=data.batch["responses"].device).mean().item(),
+            "gt_reward_mean": gt_reward_mean, 
+            "ft_reward_mean": ft_reward_mean,
         }
         
         print("\nReward metrics:", reward_metrics)
