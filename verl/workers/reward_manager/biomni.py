@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, Callable
 import importlib
 import json
+import re
 import numpy as np
 import torch
 from verl import DataProto
@@ -46,27 +47,90 @@ class BiomniRewardManager:
         gt_rewards = rewards.copy()
         ft_rewards = []
         
-        # formatting reward
+        # ------------------------------------------------------------------
+        # Formatting reward.
+        #   Every assistant message must follow one of the two templates:
+        #       1. "<think>...</think> ... <execute>...</execute>"
+        #       2. "<think>...</think> ... <solution>...</solution>"
+        #   * <solution></solution> must appear exactly once and only in the
+        #     final assistant block.
+        #   * <solution> and <execute> must never co-exist in the same block.
+        #   * Tags must not interleave (e.g. <think><execute></execute></think>).
+        # ------------------------------------------------------------------
+
+        # Pre-compiled regex to extract XML-like tags of interest
+        tag_pattern = re.compile(r"</?(think|execute|solution)>", re.IGNORECASE)
+
+        def _valid_block(content: str, *, is_last: bool) -> bool:
+            """Check whether *content* of an assistant message satisfies the
+            formatting rules described above.  The *is_last* flag indicates if
+            this is the final assistant turn in the conversation (required for
+            <solution>)."""
+
+            # Quick reject if mixed execute & solution appear at all
+            if "<execute>" in content and "<solution>" in content:
+                return False
+
+            # Gather the tag sequence in order of appearance
+            tags = [m.group(0) for m in tag_pattern.finditer(content)]
+
+            # We expect exactly four tags: opening/closing <think>, followed by
+            #   opening/closing <execute> *or* <solution>.
+            if len(tags) != 4:
+                return False
+
+            # Validate first pair is <think> ... </think>
+            if tags[0].lower() != "<think>" or tags[1].lower() != "</think>":
+                return False
+
+            # Second pair must be execute or solution consistently
+            second_open, second_close = tags[2], tags[3]
+            if second_open.lower() not in ("<execute>", "<solution>"):
+                return False
+
+            expected_close = second_open.replace("<", "</")
+            if second_close.lower() != expected_close.lower():
+                return False
+
+            # If it's a solution tag, ensure this message is the last
+            if second_open.lower() == "<solution>" and not is_last:
+                return False
+            elif second_open.lower() != "<solution>" and is_last:
+                return False
+
+            # Ensure no execute/solution tags appear inside the <think> block
+            think_block = content.split(tags[0], 1)[1].split(tags[1], 1)[0]
+            if "<execute>" in think_block or "<solution>" in think_block:
+                return False
+
+            # Ensure no think tags after the first closing </think>
+            after_think = content.split(tags[1], 1)[1]
+            if "<think>" in after_think or "</think>" in after_think:
+                return False
+
+            return True
+
         for i, convo in enumerate(messages):
             valid_format = 1
-            for msg in convo:
-                if msg["role"] == "assistant":
-                    content = msg["content"]
-                    think_open = content.count("<think>")
-                    think_close = content.count("</think>")
-                    execute_open = content.count("<execute>")
-                    execute_close = content.count("</execute>")
-                    solution_open = content.count("<solution>")
-                    solution_close = content.count("</solution>")
-                    if (think_open != think_close or 
-                        execute_open != execute_close or 
-                        solution_open != solution_close):
-                        valid_format = 0
-                        break
-                    if "<solution>" in content and "<execute>" in content:
-                        # duplicated tags
-                        valid_format = 0
-                        break
+
+            # gather indices of assistant messages
+            assistant_indices = [idx for idx, m in enumerate(convo) if m["role"] == "assistant"]
+            if not assistant_indices:
+                valid_format = 0
+                ft_rewards.append(valid_format)
+                rewards[i] += valid_format
+                continue
+
+            last_assistant_idx = assistant_indices[-1]
+
+            for idx in assistant_indices:
+                content = convo[idx]["content"]
+
+                is_last_msg = idx == last_assistant_idx
+                if not _valid_block(content, is_last=is_last_msg):
+                    valid_format = 0
+                    break
+
             rewards[i] += valid_format
             ft_rewards.append(valid_format)
 
@@ -84,13 +148,25 @@ class BiomniRewardManager:
         gt_reward_mean = torch.tensor(gt_rewards, dtype=torch.float32, device=data.batch["responses"].device).mean().item()
         ft_reward_mean = torch.tensor(ft_rewards, dtype=torch.float32, device=data.batch["responses"].device).mean().item()
         
+        # ------------------------------------------------------------------
+        # Compute mean gt reward per task
+        # ------------------------------------------------------------------
+        task_to_gt: dict[str, list[float]] = {}
+        for tname, gt in zip(task_names, gt_rewards):
+            task_to_gt.setdefault(tname, []).append(gt)
+        gt_reward_mean_per_task = {k: float(np.mean(v)) for k, v in task_to_gt.items()}
+        
+        # Flatten keys for WandB compatibility (no nested dicts)
+        flat_gt_reward_mean_per_task = {f"gt_reward_mean_per_task/{k}": v for k, v in gt_reward_mean_per_task.items()}
+        
         if return_dict:
             return {
                 "reward_tensor": token_mask,
                 "reward_extra_info": {
                     "raw_score": rewards.cpu().tolist(),
                     "gt_reward_mean": gt_reward_mean,
-                    "ft_reward_mean": ft_reward_mean
+                    "ft_reward_mean": ft_reward_mean,
+                    **flat_gt_reward_mean_per_task
                 }
             }
 
@@ -100,6 +176,7 @@ class BiomniRewardManager:
             "task_reward_mean": rewards.mean().item(), 
             "gt_reward_mean": gt_reward_mean, 
             "ft_reward_mean": ft_reward_mean,
+            **flat_gt_reward_mean_per_task,
         }
         
         print("\nReward metrics:", reward_metrics)

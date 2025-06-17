@@ -7,7 +7,7 @@ import re
 
 
 class screen_design(base_task):
-    def __init__(self, top_k=100):
+    def __init__(self, top_k=20):
         """
         Initialize the screen_design task class for gene screening
 
@@ -98,13 +98,13 @@ class screen_design(base_task):
         Returns:
         --------
         dict
-            Dictionary containing recall and F1 scores
+            Dictionary containing precision, recall and F1 scores
         """
         # Get ground truth genes for this screen
         true_genes = self.ground_truth[self.ground_truth['SCREEN_ID'] == screen_id]['OFFICIAL_SYMBOL'].values
         
         # Convert to sets for comparison
-        true_set = set(true_genes[:self.top_k])  # Top K ground truth genes
+        true_set = set(true_genes)  # use full ground truth genes for comparison
         pred_set = set(predicted_genes[:self.top_k])  # Top K predicted genes
         
         # Calculate metrics
@@ -133,7 +133,7 @@ class screen_design(base_task):
         }
 
     def reward(self, input, output):
-        """Calculate reward as F1 score for the predictions"""
+        """Calculate reward as precision score for the predictions"""
         try:
             # screen_id = input['screen_id']
             screen_id = input
@@ -145,9 +145,12 @@ class screen_design(base_task):
             # Assume output is a comma-separated list of gene symbols
             genes = [gene.strip() for gene in output.split(',')]
             
+            if len(genes) != self.top_k:
+                return 0.0
+            
             # Evaluate and return F1 score as reward
             metrics = self.evaluate(screen_id, genes)
-            return metrics['f1']
+            return metrics['precision']
         except Exception as e:
             print(f"Error in reward function: {e}")
             return 0.0
