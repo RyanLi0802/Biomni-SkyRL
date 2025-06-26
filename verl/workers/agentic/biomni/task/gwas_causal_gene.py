@@ -20,12 +20,14 @@ class gwas_causal_gene(base_task):
 
     def get_example(self, index = None):
         if index is None:
-            q = self.query.sample(n=1).iloc[0]
+            index = np.random.randint(len(self.query))
+            q = self.query.iloc[index]
         else:
             q = self.query.iloc[index]
         
         return {"prompt": self.prompt.format(trait = q.description, gene_str = q.symbol_gene_string), 
-                "answer": self.answer.iloc[index].symbol}
+                "answer": self.answer.iloc[index].symbol,
+                "instance_id": index}
 
     def split(self, ratio = 0.8, seed = 42):
         np.random.seed(seed)

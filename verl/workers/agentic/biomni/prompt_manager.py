@@ -4,50 +4,78 @@ from verl.workers.agentic.biomni.utils import (
     textify_api_dict,
     library_content_dict,
     data_lake_dict,
+    data_lake_dict_tasks,
+    library_content_dict_tasks,
     load_pkl
 )
 
 class PromptManager:
     def __init__(self, tool_path = "./tool", s3_datalake_uri="s3://biomni-datalake/"):
         module2api = load_pkl(os.path.join(tool_path, 'screen_api.pkl'))
-        api = [i for i in module2api['biomni.tool.support_tools'] if i['name'] == 'run_python_repl'][0]
-        self.tools = [api_schema_to_langchain_tool(api, mode = 'custom_tool', module_name = 'biomni.tool.support_tools')]
-        self.module2api = module2api
+        self.default_tool_dict = module2api
         self.s3_datalake_uri = s3_datalake_uri
         self.tool_path = tool_path
         self.configure()
     
     def configure(self, self_critic=False):
         self.self_critic = self_critic
-        self.data_lake_dict = data_lake_dict
-        self.library_content_dict = library_content_dict
+        self.data_lake_dict_tasks = data_lake_dict_tasks
+        self.library_content_dict_tasks = library_content_dict_tasks
         
-        tool_desc = {i: [x for x in j if x['name']!='run_python_repl'] for i, j in self.module2api.items()}
+        self.default_data_lake_dict = data_lake_dict
+        self.default_library_content_dict = library_content_dict
+        
+        self.tools_pkl_map = {
+            'rare_disease_diagnosis': os.path.join(self.tool_path, 'rare_disease_diagnosis_api_filter.pkl'),
+            'gwas_variant_prioritization': os.path.join(self.tool_path, 'gwas_variant_prioritization_api_filter.pkl'),
+            'patient_gene_detection': os.path.join(self.tool_path, 'patient_gene_detection_api_filter.pkl'),
+            'lab_bench_dbqa': os.path.join(self.tool_path, 'lab_bench_dbqa_api_filter.pkl'),
+            'lab_bench_seqqa': os.path.join(self.tool_path, 'lab_bench_seqqa_api_filter.pkl'),
+            'screen_gene_retrieval': os.path.join(self.tool_path, 'screen_gene_retrieval_api_filter.pkl'),
+            'screen_design': os.path.join(self.tool_path, 'screen_api_filter.pkl'),
+            'crispr_delivery': os.path.join(self.tool_path, 'crispr_delivery_api_filter.pkl'),
+            'gwas_causal_gene_opentargets': os.path.join(self.tool_path, 'gwas_causal_gene_opentargets_api_filter.pkl'),
+            'gwas_causal_gene_pharmaprojects': os.path.join(self.tool_path, 'gwas_causal_gene_pharmaprojects_api_filter.pkl'),
+            'gwas_causal_gene_gwas_catalog': os.path.join(self.tool_path, 'gwas_causal_gene_gwas_catalog_api_filter.pkl'),
+        }
+
+    
+    def get_initial_messages(self, user_prompt, task_name = None):
+        if task_name is None:
+            raise ValueError("Task name is required")
+        
+        tool_dict = load_pkl(self.tools_pkl_map[task_name]) if task_name in self.tools_pkl_map else self.default_tool_dict
+        data_lake_dict = self.data_lake_dict_tasks[task_name] if task_name in self.data_lake_dict_tasks else self.default_data_lake_dict
+        library_content_dict = self.library_content_dict_tasks[task_name] if task_name in self.library_content_dict_tasks else self.default_library_content_dict
+
+        tool_desc = {i: [x for x in j if x['name']!='run_python_repl'] for i, j in tool_dict.items()}
         
         # Get all data lake items from the data_lake_dict keys
-        data_lake_items = list(self.data_lake_dict.keys())
+        data_lake_items = list(data_lake_dict.keys())
         
         data_lake_with_desc = []
         for item in data_lake_items:
-            description = self.data_lake_dict.get(item, f"Data lake item: {item}")
+            description = data_lake_dict.get(item, f"Data lake item: {item}")
             data_lake_with_desc.append({"name": item, "description": description})
         
-        self.system_prompt = self._generate_system_prompt(
+        system_prompt = self._generate_system_prompt(
             tool_desc=tool_desc,
             data_lake_content=data_lake_with_desc,
-            library_content_list=list(self.library_content_dict.keys()),
-            self_critic=self_critic,
+            library_content_list=list(library_content_dict.keys()),
+            library_content_dict=library_content_dict,
+            data_lake_dict=data_lake_dict,
+            self_critic=self.self_critic,
             is_retrieval=False
         )
     
-    def get_initial_messages(self, user_prompt):
+    
         return [
-            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
     
     
-    def _generate_system_prompt(self, tool_desc, data_lake_content, library_content_list, self_critic=False, is_retrieval=False):
+    def _generate_system_prompt(self, tool_desc, data_lake_content, library_content_list, library_content_dict, data_lake_dict, self_critic=False, is_retrieval=False):
         """
         Generate the system prompt based on the provided resources.
         
@@ -80,11 +108,11 @@ class PromptManager:
             if isinstance(item, dict):
                 name = item.get('name', 'Unknown_Item')
                 # Use description from item if provided, otherwise lookup in self.data_lake_dict
-                description = item.get('description', self.data_lake_dict.get(name, f"Data lake item: {name}"))
+                description = item.get('description', data_lake_dict.get(name, f"Data lake item: {name}"))
                 data_lake_formatted.append(f"{name}: {description}")
             elif isinstance(item, str):
                  # If it's just a name, look up description in self.data_lake_dict
-                data_lake_formatted.append(format_item_with_description(item, self.data_lake_dict, "data lake"))
+                data_lake_formatted.append(format_item_with_description(item, data_lake_dict, "data lake"))
             else:
                  data_lake_formatted.append(str(item)) # Fallback
 
@@ -94,11 +122,11 @@ class PromptManager:
             if isinstance(lib, dict):
                 name = lib.get('name', 'Unknown_Library')
                  # Use description from item if provided, otherwise lookup in self.library_content_dict
-                description = lib.get('description', self.library_content_dict.get(name, f"Software library: {name}"))
+                description = lib.get('description', library_content_dict.get(name, f"Software library: {name}"))
                 libraries_formatted.append(f"{name}: {description}")
             elif isinstance(lib, str):
                 # If it's just a name, look up description in self.library_content_dict
-                libraries_formatted.append(format_item_with_description(lib, self.library_content_dict, "library"))
+                libraries_formatted.append(format_item_with_description(lib, library_content_dict, "library"))
             else:
                 libraries_formatted.append(str(lib)) # Fallback
 

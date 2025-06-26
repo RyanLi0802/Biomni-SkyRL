@@ -8,6 +8,12 @@ import torch
 from verl import DataProto
 from verl.workers.agentic.biomni.task.screen_design import screen_design
 from verl.workers.agentic.biomni.task.gwas_causal_gene import gwas_causal_gene
+from verl.workers.agentic.biomni.task.crispr_delivery import crispr_delivery
+from verl.workers.agentic.biomni.task.rare_disease_diagnosis import rare_disease_diagnosis
+from verl.workers.agentic.biomni.task.gwas_variant_prioritization import gwas_variant_prioritization
+from verl.workers.agentic.biomni.task.patient_gene_detection import patient_gene_detection
+from verl.workers.agentic.biomni.task.lab_bench import lab_bench
+from verl.workers.agentic.biomni.task.screen_gene_retrieval import screen_gene_retrieval
 
 class BiomniRewardManager:
     def __init__(self, tokenizer, num_examine, config, compute_score=None):
@@ -15,11 +21,21 @@ class BiomniRewardManager:
         self.num_examine = num_examine
         self.config = config
 
-        top_k = config.get("top_k", 100)
         self.task_mapping = {
-            "screen_design": screen_design(top_k=top_k),
-            "gwas_causal_gene_pharmaprojects": gwas_causal_gene(path = '/dfs/project/bioagentos/biomni_data/benchmark/', dataset = 'pharmaprojects', num_samples = 100000),
+            "rare_disease_diagnosis": rare_disease_diagnosis('/dfs/project/bioagentos/biomni_data/benchmark/'),
+            "gwas_variant_prioritization": gwas_variant_prioritization('/dfs/project/bioagentos/biomni_data/benchmark/', num_samples = 10000),
+            "patient_gene_detection": patient_gene_detection('/dfs/project/bioagentos/biomni_data/benchmark/', num_samples = 10000),
+            "lab_bench_dbqa": lab_bench('/dfs/project/bioagentos/biomni_data/benchmark/', dataset = "DbQA"),
+            "lab_bench_seqqa": lab_bench('/dfs/project/bioagentos/biomni_data/benchmark/', dataset = "SeqQA"),
+            # "hle": humanity_last_exam('/dfs/project/bioagentos/biomni_data/benchmark/'),
+            "screen_gene_retrieval": screen_gene_retrieval(),
+            "screen_design": screen_design(top_k = 20),
+            "crispr_delivery": crispr_delivery(num_samples = 10000),
         }
+        
+        for data_name in ['opentargets', 'pharmaprojects', 'gwas_catalog']:
+            self.task_mapping[f"gwas_causal_gene_{data_name}"] = gwas_causal_gene(path = '/dfs/project/bioagentos/biomni_data/benchmark/', dataset = data_name, num_samples = 100000)
+        
 
     def __call__(self, data: DataProto, *, return_dict: bool = False):
         """
@@ -186,10 +202,10 @@ class BiomniRewardManager:
         
         for task_name, inp, out, convo, gt_reward, ft_reward, first_token in zip(task_names, inputs, solutions, messages, gt_rewards, ft_rewards, first_tokens):
             reward_details.append({
-                "screen_id": inp,
-                "gt_reward": gt_reward,
-                "ft_reward": ft_reward,
-                "first_token": first_token.item(),
+                "instance_id": int(inp) if isinstance(inp, (np.integer, np.int64)) else inp,
+                "gt_reward": float(gt_reward),
+                "ft_reward": float(ft_reward),
+                "first_token": float(first_token.item()),
                 "prompt": convo[1]["content"],
                 "output": out,
             })

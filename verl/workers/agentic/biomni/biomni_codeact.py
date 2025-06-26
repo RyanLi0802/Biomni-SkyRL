@@ -340,6 +340,7 @@ class BiomniCodeActAgent:
         self,
         prompt: str,
         instance_id: int,
+        task_name: str,
         runtime: BiomniRuntimeClient,
         infer_engine,
         tokenizer: PreTrainedTokenizerBase,
@@ -353,13 +354,14 @@ class BiomniCodeActAgent:
         self.tok = tokenizer
         self.sampling_params = sampling_params
         self.instance_id = instance_id
+        self.task_name = task_name
         self.max_prompt_len = max_prompt_len
         self.max_iterations = max_iterations
         self.qwen3_enable_thinking = qwen3_enable_thinking
         self.prompt_manager = PromptManager(tool_path="verl/workers/agentic/biomni/tool")
 
         # -- conversation memory ------------------------------------------------
-        self.messages = self.prompt_manager.get_initial_messages(prompt)
+        self.messages = self.prompt_manager.get_initial_messages(prompt, task_name)
         self.log: List[Dict[str, str]] = []   # optional external logging
 
     # ------------------------------------------------------------------
@@ -610,11 +612,12 @@ class BiomniCodeActAgentGroup:
         sem = asyncio.Semaphore(self.max_parallel)
         tasks: list[asyncio.Task] = []
 
-        async def _run_single(batch_idx: int, traj_idx: int, instance_id: int, prompt: str):
+        async def _run_single(batch_idx: int, traj_idx: int, instance_id: int, prompt: str, task_name: str):
             async with sem, BiomniRuntimeClient(self.runtime_url) as rt:
                 agent = BiomniCodeActAgent(
                     prompt=prompt,
                     instance_id=instance_id,
+                    task_name=task_name,
                     runtime=rt,
                     infer_engine=self.engine,
                     tokenizer=self.tok,
@@ -631,8 +634,9 @@ class BiomniCodeActAgentGroup:
         for batch_idx, data_item in enumerate(self.orig_batch):
             prompt = data_item.non_tensor_batch["raw_prompt"]
             instance_id = data_item.non_tensor_batch["instance_id"]
+            task_name = data_item.non_tensor_batch["task_name"]
             for traj_idx in range(self.nt):
-                tasks.append(asyncio.create_task(_run_single(batch_idx, traj_idx, instance_id, prompt)))
+                tasks.append(asyncio.create_task(_run_single(batch_idx, traj_idx, instance_id, prompt, task_name)))
 
         # run all tasks
         gathered: list[tuple[int, int, dict]] = await asyncio.gather(*tasks)
@@ -849,11 +853,14 @@ if __name__ == "__main__":
     import torch
 
     from verl.workers.agentic.biomni.task.screen_design import screen_design
+    from verl.workers.agentic.biomni.task.rare_disease_diagnosis import rare_disease_diagnosis
+    from verl.workers.agentic.biomni.task.gwas_causal_gene import gwas_causal_gene
+    from verl.workers.agentic.biomni.task.patient_gene_detection import patient_gene_detection
 
     # ------------------------- CLI ----------------------------------
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", required=True)
-    parser.add_argument("--n_instances", type=int, default=3,
+    parser.add_argument("--n_instances", type=int, default=2,
                         help="How many task examples to sample")
     parser.add_argument("--n_traj", type=int, default=2,
                         help="Trajectories per instance")
@@ -875,12 +882,39 @@ if __name__ == "__main__":
     base_sampling = {"max_new_tokens": 4096, "temperature": 0.6}
 
     # --------------------- build real batch -------------------------
-    task = screen_design(top_k=100)
+    task_map = {
+        "rare_disease_diagnosis": rare_disease_diagnosis('/dfs/project/bioagentos/biomni_data/benchmark/'),
+        "screen_design": screen_design(top_k = 20),
+        "patient_gene_detection": patient_gene_detection('/dfs/project/bioagentos/biomni_data/benchmark/', num_samples = 10000),
+        "gwas_causal_gene_pharmaprojects": gwas_causal_gene(path = '/dfs/project/bioagentos/biomni_data/benchmark/', dataset = "pharmaprojects", num_samples = 100000),
+    }
+    task = task_map["screen_design"]
     examples = [task.get_example() for _ in range(args.n_instances)]
 
     prompts      = [ex["prompt"]    for ex in examples]
     instance_ids = [ex["screen_id"] for ex in examples]
     task_names   = ["screen_design"] * args.n_instances
+    
+    task = task_map["gwas_causal_gene_pharmaprojects"]
+    new_examples = [task.get_example() for _ in range(args.n_instances)]
+    examples.extend(new_examples)
+    prompts.extend([ex["prompt"] for ex in new_examples])
+    instance_ids.extend([ex["instance_id"] for ex in new_examples])
+    task_names.extend(["gwas_causal_gene_pharmaprojects"] * args.n_instances)
+    
+    task = task_map["patient_gene_detection"]
+    new_examples = [task.get_example() for _ in range(args.n_instances)]
+    examples.extend(new_examples)
+    prompts.extend([ex["prompt"] for ex in new_examples])
+    instance_ids.extend([ex["instance_id"] for ex in new_examples])
+    task_names.extend(["patient_gene_detection"] * args.n_instances)
+    
+    task = task_map["rare_disease_diagnosis"]
+    new_examples = [task.get_example() for _ in range(args.n_instances)]
+    examples.extend(new_examples)
+    prompts.extend([ex["prompt"] for ex in new_examples])
+    instance_ids.extend([ex["instance_id"] for ex in new_examples])
+    task_names.extend(["rare_disease_diagnosis"] * args.n_instances)
 
     batch_dp = DataProto.from_dict(
         tensors={"input_ids": torch.zeros(len(prompts), 1, dtype=torch.long)},
