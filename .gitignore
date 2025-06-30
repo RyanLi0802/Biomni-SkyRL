@@ -6,3 +6,4 @@ wandb/
 logs/
 temp.*
 *.log
+.env.*

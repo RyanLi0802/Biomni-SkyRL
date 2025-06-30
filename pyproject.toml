@@ -43,13 +43,10 @@ dependencies=[
   'wandb',
   "hf_transfer",
   "torchdata",
-  "openhands-ai",
   "streamlit",
   "whatthepatch",
   "retry",
   "evaluate",
-  "swebench@https://github.com/SWE-Gym/SWE-Bench-Fork.git",
-  "swegym@https://github.com/SWE-Gym/SWE-Bench-Package.git",
   "commit0",
   "func_timeout",
   "sympy",
@@ -64,23 +61,24 @@ dependencies=[
   'tensordict<=0.6.2',
   'torch-memory-saver>=0.0.5',
   'vllm>=0.7.3',
+  'langchain-core',
 ]
 
 [tool.uv]
 override-dependencies = ["ray==2.43.0", "xgrammar==0.1.17"]
 conflicts = [
     [
-        { extra = "swebench" },
+        { extra = "biomni" },
         { extra = "sql" },
     ],
 ]
 
 # NOTE (sumanthrh): This is a hack pending more investigation.
-# Currently, sglang 0.4.6.post1 is needed for swebench training - this is to support Qwen3 models 
+# Currently, sglang 0.4.6.post1 is needed for biomni training - this is to support Qwen3 models 
 # However, with the SQL task, we've noticed that using 0.4.6.post1 leads to a 10x slowdown in generation time compared to 0.4.4.post1. 
 # Dependency management with sglang is messy at the moment. I've not been able to track down the root cause yet. 
 [project.optional-dependencies]
-swebench = [
+biomni = [
     'sglang[all]==0.4.6.post1', 
     # We explictly use a flashinfer wheel from their index because the wheels on PyPI don't come with pre-compiled kernels and the package will JIT compile them at runtime (very slow).
     "flashinfer-python@https://github.com/flashinfer-ai/flashinfer/releases/download/v0.2.3/flashinfer_python-0.2.3+cu124torch2.6-cp38-abi3-linux_x86_64.whl#sha256=cbc4acb4aed7c4b00887a557dac484315327a063e25ac1ed4ee8eef54edf9ef6",
@@ -94,9 +92,6 @@ sql = [
     "flash-attn@https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.5cxx11abifalse-cp312-cp312-linux_x86_64.whl"
 ]
 test = ['pytest', 'yapf', 'py-spy']
-
-[tool.uv.sources]
-openhands-ai = { path = "./SkyRL-OpenHands", editable = true }
 
 # -------------------------------
 # tool.setuptools - Additional config

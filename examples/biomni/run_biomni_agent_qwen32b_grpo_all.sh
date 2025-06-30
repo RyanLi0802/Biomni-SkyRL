@@ -1,22 +1,36 @@
-#! /bin/bash
+#!/bin/bash
 
+# NCCL Configuration
+export NCCL_TIMEOUT=14400  # Increase timeout to 4 hours (from default 2 hours)
+export NCCL_DEBUG=INFO
+export NCCL_ASYNC_ERROR_HANDLING=1  # per-rank error report
+export TORCH_NCCL_TRACE_BUFFER_SIZE=10000
+export PYTHONFAULTHANDLER=1
+
+# Original environment variables
+export UV_CACHE_DIR=/dfs/scratch1/lansong/uv_cache
+export XDG_CACHE_HOME=$UV_CACHE_DIR
+export UV_PROJECT_ENVIRONMENT=/dfs/scratch1/lansong/venvs/skyrl
+export HOME=/dfs/scratch1/lansong
 export RAY_RUNTIME_ENV_HOOK=ray._private.runtime_env.uv_runtime_env_hook.hook
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 PROJECT_NAME='biomni-training-qwen3-32b-grpo'
 EXPERIMENT_NAME='biomni-training-qwen3-32b-32bsz-temp0.6-clip-0.28-32turn-grpo'
-DATA_PATH="/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all"
+# DATA_PATH="/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all"
+TRAIN_FILE='/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all/train_updated.parquet'
+VAL_FILE='/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all/val.parquet'
 SFT_MODEL_PATH='/dfs/scratch1/lansong/models/qwen/qwen3-32b-sft-full-v1/global_step_208' 
 CKPT_PATH='/dfs/scratch1/lansong/models/qwen'
-# RUNTIME_URL='http://172.24.75.232:8000'
-RUNTIME_URL='http://172.24.75.90:8000'
+# RUNTIME_URL='http://172.24.75.232:8000'   # ampere7
+RUNTIME_URL='http://172.24.75.90:8000'    # ampere9
 TASK_TYPE='biomni'
 
 BATCH_SIZE=32
 MAX_NUM_ITERS=32
 NUM_TRAJ=8
 MAX_PARALLEL_AGENTS=128
-SAVE_FREQ=4
+SAVE_FREQ=1
 
 USE_KL_LOSS=True
 KL_LOSS_COEF=0.001
@@ -27,18 +41,18 @@ CLIP_RATIO_HIGH=0.28
 
 # 4xA100: tp size -> 4, sequence parallel size -> 2, nnodes -> 4
 GPU_MEM_UTIL=0.8
-TP_SIZE=4
+TP_SIZE=2
 NNODES=4
-SP_SIZE=2
+SP_SIZE=4
 
 
 TEMPERATURE=0.6
 TOP_P=0.95
 
-PYTHONUNBUFFERED=1 python -m verl.trainer.main_ppo \
+PYTHONUNBUFFERED=1 HOME=/dfs/scratch1/lansong uv run --env-file .env.biomni -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
-    data.train_files=["$DATA_PATH/train.parquet"] \
-    data.val_files=["$DATA_PATH/val.parquet"] \
+    data.train_files=["$TRAIN_FILE"] \
+    data.val_files=["$VAL_FILE"] \
     data.train_batch_size=$BATCH_SIZE \
     data.max_prompt_length=31744 \
     data.max_response_length=3072 \
