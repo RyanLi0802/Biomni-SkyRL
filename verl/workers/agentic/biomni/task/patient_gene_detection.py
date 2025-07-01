@@ -70,20 +70,31 @@ The output inside the <solution> and </solution> tags must be a valid json strin
         return train_indices, val_indices
 
     def reward(self, input, output):
+        # Check if output is None or empty
+        if output is None or output == "":
+            return 0.0
+            
         # parse output to dict/json
         # Try json.loads first for valid JSON, then fall back to ast.literal_eval for Python dict syntax
         try:
             output = json.loads(output)
-        except json.JSONDecodeError:
+        except Exception as e:
+            print(e)
             try:
                 output = ast.literal_eval(output)
-            except (ValueError, SyntaxError):
+            except Exception as e:
+                print(e)
                 # If both fail, return 0
                 return 0.0
         
         print("Instance_id: ", input)
         print("Prompt: ", self.get_example(input)['prompt'])
         
+        # Check if output is a valid dictionary
+        if not isinstance(output, dict):
+            print(f"Warning: Output is not a dictionary: {type(output)}")
+            return 0.0
+            
         true_genes = self.get_example(input)["answer"]
         # Use .get() for safer dictionary access
         predicted_genes = output.get('causal_gene', [])

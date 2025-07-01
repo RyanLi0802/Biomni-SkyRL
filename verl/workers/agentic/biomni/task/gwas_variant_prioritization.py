@@ -40,6 +40,9 @@ class gwas_variant_prioritization(base_task):
         return train_indices, val_indices
 
     def reward(self, input, output):
+        if output is None or output == "":
+            return 0.0
+        
         answer = self.get_example(input)['answer']
         return 1 if output == answer else 0
 

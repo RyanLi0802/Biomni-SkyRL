@@ -543,7 +543,7 @@ class BiomniCodeActAgentGroup:
         max_response_length: int = 3072,
         max_starting_message_length: int = 12000,
         max_iterations: int = 32,
-        max_parallel_agents: int = 32,
+        max_parallel_agents: int = 256,
         qwen3_enable_thinking: bool = True,
         remove_think_tokens: bool = False,
     ):

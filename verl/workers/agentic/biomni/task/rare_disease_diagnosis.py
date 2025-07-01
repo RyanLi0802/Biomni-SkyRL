@@ -88,14 +88,22 @@ Return 'task completed' if the answer is correct, and 'task not completed' other
     def reward(self, input, output):
         # parse output to dict/json
         # Try json.loads first for valid JSON, then fall back to ast.literal_eval for Python dict syntax
+        if output is None or output == "":
+            return 0.0
         try:
             output = json.loads(output)
-        except json.JSONDecodeError:
+        except Exception as e:
+            print(e)
             try:
                 output = ast.literal_eval(output)
-            except (ValueError, SyntaxError):
+            except Exception as e:
+                print(e)
                 # If both fail, return 0
                 return 0
+        
+        if not isinstance(output, dict):
+            print(f"Warning: Output is not a dictionary: {type(output)}")
+            return 0.0
         
         answer = self.get_example(input)['answer']
         

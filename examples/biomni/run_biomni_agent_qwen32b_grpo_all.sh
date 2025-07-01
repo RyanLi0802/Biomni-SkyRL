@@ -22,15 +22,15 @@ TRAIN_FILE='/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all/
 VAL_FILE='/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all/val.parquet'
 SFT_MODEL_PATH='/dfs/scratch1/lansong/models/qwen/qwen3-32b-sft-full-v1/global_step_208' 
 CKPT_PATH='/dfs/scratch1/lansong/models/qwen'
-# RUNTIME_URL='http://172.24.75.232:8000'   # ampere7
-RUNTIME_URL='http://172.24.75.90:8000'    # ampere9
+RUNTIME_URL='http://172.24.75.232:8000'   # ampere7
+# RUNTIME_URL='http://172.24.75.90:8000'    # ampere9
 TASK_TYPE='biomni'
 
 BATCH_SIZE=32
 MAX_NUM_ITERS=32
 NUM_TRAJ=8
-MAX_PARALLEL_AGENTS=128
-SAVE_FREQ=1
+MAX_PARALLEL_AGENTS=512
+SAVE_FREQ=2
 
 USE_KL_LOSS=True
 KL_LOSS_COEF=0.001
@@ -43,13 +43,13 @@ CLIP_RATIO_HIGH=0.28
 GPU_MEM_UTIL=0.8
 TP_SIZE=2
 NNODES=4
-SP_SIZE=4
+SP_SIZE=2
 
 
 TEMPERATURE=0.6
 TOP_P=0.95
 
-PYTHONUNBUFFERED=1 HOME=/dfs/scratch1/lansong uv run --env-file .env.biomni -m verl.trainer.main_ppo \
+PYTHONUNBUFFERED=1 HOME=/dfs/scratch1/lansong uv run --env-file /dfs/scratch1/lansong/SkyRL/.env.biomni -m verl.trainer.main_ppo \
     algorithm.adv_estimator=grpo \
     data.train_files=["$TRAIN_FILE"] \
     data.val_files=["$VAL_FILE"] \
@@ -101,7 +101,8 @@ PYTHONUNBUFFERED=1 HOME=/dfs/scratch1/lansong uv run --env-file .env.biomni -m v
     trainer.project_name=$PROJECT_NAME \
     trainer.experiment_name=$EXPERIMENT_NAME \
     trainer.default_local_dir=$CKPT_PATH/$PROJECT_NAME/$EXPERIMENT_NAME \
-    trainer.resume_mode=auto \
+    trainer.resume_mode=resume_path \   # change it to auto in the next run
+    trainer.resume_from_path=/dfs/scratch1/lansong/models/qwen/biomni-training-qwen3-32b-grpo/biomni-training-qwen3-32b-32bsz-temp0.6-clip-0.28-32turn-grpo/global_step_42 \
     trainer.max_actor_ckpt_to_keep=128 \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=$NNODES \
