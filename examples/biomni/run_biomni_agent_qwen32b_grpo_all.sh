@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # NCCL Configuration
-export NCCL_TIMEOUT=14400  # Increase timeout to 4 hours (from default 2 hours)
+export NCCL_TIMEOUT=28800  # Increase timeout to 8 hours (from default 2 hours)
 export NCCL_DEBUG=INFO
 export NCCL_ASYNC_ERROR_HANDLING=1  # per-rank error report
 export TORCH_NCCL_TRACE_BUFFER_SIZE=10000
@@ -22,8 +22,8 @@ TRAIN_FILE='/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all/
 VAL_FILE='/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all/val.parquet'
 SFT_MODEL_PATH='/dfs/scratch1/lansong/models/qwen/qwen3-32b-sft-full-v1/global_step_208' 
 CKPT_PATH='/dfs/scratch1/lansong/models/qwen'
-RUNTIME_URL='http://172.24.75.232:8000'   # ampere7
-# RUNTIME_URL='http://172.24.75.90:8000'    # ampere9
+# RUNTIME_URL='http://172.24.75.232:8000'   # ampere7
+RUNTIME_URL='http://172.24.75.90:8000'    # ampere9
 TASK_TYPE='biomni'
 
 BATCH_SIZE=32
@@ -101,8 +101,8 @@ PYTHONUNBUFFERED=1 HOME=/dfs/scratch1/lansong uv run --env-file /dfs/scratch1/la
     trainer.project_name=$PROJECT_NAME \
     trainer.experiment_name=$EXPERIMENT_NAME \
     trainer.default_local_dir=$CKPT_PATH/$PROJECT_NAME/$EXPERIMENT_NAME \
-    trainer.resume_mode=resume_path \   # change it to auto in the next run
-    trainer.resume_from_path=/dfs/scratch1/lansong/models/qwen/biomni-training-qwen3-32b-grpo/biomni-training-qwen3-32b-32bsz-temp0.6-clip-0.28-32turn-grpo/global_step_42 \
+    trainer.resume_mode=resume_path \
+    trainer.resume_from_path=/dfs/scratch1/lansong/models/qwen/biomni-training-qwen3-32b-grpo/biomni-training-qwen3-32b-32bsz-temp0.6-clip-0.28-32turn-grpo/global_step_90 \
     trainer.max_actor_ckpt_to_keep=128 \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=$NNODES \

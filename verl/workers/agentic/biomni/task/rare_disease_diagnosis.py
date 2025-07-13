@@ -1,12 +1,14 @@
 import sys, json, numpy as np, pandas as pd, requests
 from pydantic import BaseModel, Field
 import ast
+import os
 
 from verl.workers.agentic.biomni.task.base_task import base_task
 
 class rare_disease_diagnosis(base_task):
     def __init__(self, path = './data', num_samples = None):
-        data_path = path + '/rare_disease_diagnosis/mygene.json'
+        # data_path = os.path.join(path, 'rare_disease_diagnosis', 'mygene.json')
+        data_path = '/dfs/user/kexinh/BioAgentOS/data/mygene.json'
         data = []
         with open(data_path, "r") as file:
             for line in file:

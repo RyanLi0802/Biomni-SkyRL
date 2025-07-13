@@ -80,7 +80,7 @@ class ActorRolloutRefWorker(Worker):
         import torch.distributed
         if not torch.distributed.is_initialized():
             from datetime import timedelta
-            torch.distributed.init_process_group(timeout=timedelta(minutes=240))
+            torch.distributed.init_process_group(timeout=timedelta(minutes=480))
 
         # build device mesh for FSDP
         world_size = torch.distributed.get_world_size()
