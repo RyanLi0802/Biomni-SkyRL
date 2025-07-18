@@ -194,6 +194,8 @@ class BiomniRewardManager:
             "ft_reward_mean": ft_reward_mean,
             **flat_gt_reward_mean_per_task,
         }
+        # Add per-trajectory formatting rewards to metrics for filtering
+        reward_metrics["_per_traj_ft_rewards"] = ft_rewards
         
         print("\nReward metrics:", reward_metrics)
         first_tokens = [reward_tensor_dict["all"][i][valid_len[i] - 1] for i in range(len(valid_len))]

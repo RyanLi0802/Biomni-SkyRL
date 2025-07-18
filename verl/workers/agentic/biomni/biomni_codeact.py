@@ -286,10 +286,18 @@ class BiomniRuntimeClient:
                    "code": code,
                    "timeout_seconds": timeout}
         max_retries = 3
+        
         for attempt in range(max_retries):
             try:
                 async with self._client.post(f"{self.base}/execute", json=payload,
                                              timeout=timeout+5) as r:
+                    # Check for 404 with "Unknown session_id" error
+                    if r.status == 404:
+                        logger.warning(f"Session {self.session_id} not found on server, creating new session")
+                        self.session_id = await self._start()
+                        payload["session_id"] = self.session_id
+                        continue
+                    
                     r.raise_for_status()
                     return (await r.json())["output"]
             except (aiohttp.ClientOSError, aiohttp.ServerDisconnectedError, aiohttp.ClientError) as e:
@@ -380,7 +388,7 @@ class BiomniCodeActAgent:
         if len(input_ids) >= self.max_prompt_len:
             return "The context is too long. Exit now."
         
-        max_retries = 4
+        max_retries = 1
         for _ in range(max_retries):
             res = await self.engine.async_generate(
                 input_ids=input_ids,
@@ -486,8 +494,9 @@ class BiomniCodeActAgent:
             )
         
         if not solution:
-            print(f"[WARNING] No solution found for instance {self.instance_id} after {step} iterations, showing the last message...")
-            print(self.messages[-1])
+            print(f"[WARNING] No solution found for instance {self.instance_id} after {step} iterations, showing the last two message...")
+            import json
+            print(json.dumps(self.messages[-2:], indent=2))
 
         return {
             "messages": self.messages,
@@ -864,22 +873,42 @@ if __name__ == "__main__":
                         help="How many task examples to sample")
     parser.add_argument("--n_traj", type=int, default=2,
                         help="Trajectories per instance")
+    parser.add_argument("--use_rope_scaling", action="store_true",
+                        help="Use rope scaling")
     args = parser.parse_args()
 
     # -------------------------- engine ------------------------------
-    eng = Engine(
+    total_len = 32768 if not args.use_rope_scaling else 131072
+    max_response_length = 3072 if not args.use_rope_scaling else 8192
+    max_prompt_length = total_len - max_response_length
+    
+    engine_kwargs = dict(
         model_path=args.model_path,
         port=40000,
         dtype="float16",
-        max_total_tokens=60 * 32768,
-        max_prefill_tokens=2 * 32768,
+        max_total_tokens=60 * total_len,
+        max_prefill_tokens=2 * total_len,
         enable_memory_saver=True,
         mem_fraction_static=0.4,
         tp_size=4,
         log_level="INFO",
     )
+    if args.use_rope_scaling:
+        new_ctx = 131072                      # 4 × original_limit
+        override = {
+            "rope_scaling": {
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768
+            },
+            "max_position_embeddings": new_ctx,
+            "model_max_length": new_ctx
+        }
+        engine_kwargs["json_model_override_args"] = json.dumps(override)
+        # os.environ["SGLANG_MAX_CONTEXT_LEN"] = str(new_ctx)  # belt-and-braces
+    eng = Engine(**engine_kwargs)
     tok = AutoTokenizer.from_pretrained(args.model_path)
-    base_sampling = {"max_new_tokens": 4096, "temperature": 0.6}
+    base_sampling = {"max_new_tokens": 8192, "temperature": 0.6}
 
     # --------------------- build real batch -------------------------
     task_map = {
@@ -932,7 +961,9 @@ if __name__ == "__main__":
         infer_engine=eng,
         tokenizer=tok,
         sampling_params=copy.deepcopy(base_sampling),
-        runtime_url="http://172.24.75.232:8000",
+        runtime_url="http://172.24.75.90:8000",
+        max_prompt_length=max_prompt_length,
+        max_response_length=max_response_length,
     )
     dp = grp.run()
 
@@ -964,6 +995,21 @@ if __name__ == "__main__":
         assert prompt_txt in prompt_slice, f"✗ prompt appears after assistant in row {row_idx}"
 
     print("✓ Pairing + prompt-placement tests passed.")
+
+    # -------------- length statistics --------------
+    # Calculate total length for each sequence (sum of attention mask)
+    total_lengths = dp.batch["attention_mask"].sum(dim=1).cpu().numpy()
+    avg_length = total_lengths.mean()
+    max_length = total_lengths.max()
+    
+    print(f"\n--- Length Statistics ---")
+    print(f"Average total length: {avg_length:.2f}")
+    print(f"Max total length: {max_length}")
+    print(f"Number of sequences: {len(total_lengths)}")
+    # Find the index of the longest trajectory
+    longest_idx = total_lengths.argmax()
+    print("\n--- Longest Trajectory (Full Dump) ---")
+    print(json.dumps(msgs_out[longest_idx], indent=2))
 
     # # -------------- pretty-print a sample conversation --------------
     # sample_json = json.dumps(msgs_out[0], indent=2)

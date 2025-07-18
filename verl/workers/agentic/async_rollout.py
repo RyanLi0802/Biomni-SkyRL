@@ -57,7 +57,7 @@ class AsyncRollout(BaseRollout):
         torch.distributed.barrier()
         # print(f"nodedup in async rollout {os.environ['CUDA_VISIBLE_DEVICES']=} @ {torch.distributed.get_rank()=} {self.tp_rank=}")
         if self.tp_rank == 0:
-            self.engine = sgl.Engine(
+            engine_kwargs = dict(
                 model_path=model_path,
                 port=40000,
                 dtype=config.dtype,
@@ -69,6 +69,10 @@ class AsyncRollout(BaseRollout):
                 log_level="INFO",
                 # enable_metrics=True,
             )
+            if getattr(config, "json_override_args", None) is not None:
+                print(f"Using json override args: {config.json_override_args}")
+                engine_kwargs["json_model_override_args"] = config.json_override_args
+            self.engine = sgl.Engine(**engine_kwargs)
             print(f"nodedup {torch.distributed.get_rank() = } releasing memory occupation")
             self.engine.release_memory_occupation()
             print(f"nodedup {torch.distributed.get_rank() = } engine initialized")

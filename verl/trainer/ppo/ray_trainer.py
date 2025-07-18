@@ -1023,14 +1023,54 @@ class RayPPOTrainer(object):
                             batch = batch.union(reward_tensor)
 
                         # we combine with rule-based rm
-                        # we combine with rule-based rm
                         reward_tensor_dict, reward_metrics = self.reward_fn(batch)
                         batch.batch['token_level_scores'] = reward_tensor_dict['all']
                         for k, v in reward_metrics.items():
-                            metrics['train_reward/' + k] = v
+                            if not k.startswith('_'):  # Skip internal metrics
+                                metrics['train_reward/' + k] = v
                         # decomposed rewards:
                         for k, v in reward_tensor_dict.items():
                             batch.batch[k]=v
+
+                        # Filter overlong trajectories with invalid formatting
+                        # This feature helps prevent the model from learning from trajectories that:
+                        # 1. Exceed the original 32k context length (before rope scaling)
+                        # 2. Have invalid formatting (formatting reward = 0)
+                        # These trajectories are likely malformed and could harm training quality.
+                        # When enabled, such trajectories are masked out in the loss computation,
+                        # preventing gradient updates while preserving rewards for advantage calculation.
+                        if self.config.actor_rollout_ref.get('filter_overlong_invalid_trajectories', False):
+                            # Get sequence lengths
+                            attention_mask = batch.batch['attention_mask']
+                            sequence_lengths = attention_mask.sum(dim=-1)
+                            threshold = self.config.actor_rollout_ref.get('overlong_trajectory_threshold', 32768)
+                            is_overlong = sequence_lengths > threshold  # Check against configurable threshold
+                            
+                            # Get per-trajectory formatting rewards
+                            if "_per_traj_ft_rewards" in reward_metrics:
+                                responses = batch.batch['responses']
+                                response_length = responses.size(1)          # T_resp
+
+                                ft_rewards = reward_metrics["_per_traj_ft_rewards"]
+                                ft_rewards_tensor = torch.tensor(ft_rewards, device=attention_mask.device)
+                                
+                                # Create mask for invalid trajectories (overlong AND formatting reward = 0)
+                                invalid_mask = is_overlong & (ft_rewards_tensor == 0)
+                                n_filtered = invalid_mask.sum().item()
+                                
+                                if n_filtered > 0:
+                                    print(f"Filtering {n_filtered} overlong trajectories with invalid formatting from loss computation")
+                                    
+                                    if 'loss_mask' not in batch.batch:
+                                        # only last T_resp tokens
+                                        batch.batch['loss_mask'] = attention_mask[:, -response_length:].clone()
+                                    
+                                    # Zero out loss_mask for overlong and invalid trajectories
+                                    invalid_mask_expanded = invalid_mask.unsqueeze(-1)
+                                    batch.batch['loss_mask'] = batch.batch['loss_mask'] * (~invalid_mask_expanded).long()
+                                    
+                                    # Update metrics
+                                    metrics['train_reward/n_filtered_overlong'] = n_filtered
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
