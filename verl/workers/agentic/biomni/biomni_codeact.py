@@ -280,7 +280,7 @@ class BiomniRuntimeClient:
                     raise
                 await asyncio.sleep(1.0 * (attempt + 1))
 
-    async def execute(self, code: str, timeout: int = 600) -> str:
+    async def execute(self, code: str, timeout: int = 1800) -> str:
         """Run *code* inside the persistent namespace of this session."""
         payload = {"session_id": self.session_id,
                    "code": code,
