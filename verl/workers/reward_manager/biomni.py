@@ -199,6 +199,7 @@ class BiomniRewardManager:
         # Count instances where all rollouts failed or succeeded
         all_failed_count = 0
         all_succeeded_count = 0
+        pass_at_n_count = 0  # Count instances where at least one rollout succeeded
         num_unique_instances = len(instance_to_rewards)
         
         for instance_key, rewards_list in instance_to_rewards.items():
@@ -206,9 +207,14 @@ class BiomniRewardManager:
                 all_failed_count += 1
             elif all(r == 1 for r in rewards_list):
                 all_succeeded_count += 1
+            
+            # Check if at least one rollout succeeded (pass@n)
+            if any(r == 1 for r in rewards_list):
+                pass_at_n_count += 1
         
         mean_all_failed = all_failed_count / num_unique_instances if num_unique_instances > 0 else 0.0
         mean_all_succeeded = all_succeeded_count / num_unique_instances if num_unique_instances > 0 else 0.0
+        pass_at_n_percentage = pass_at_n_count / num_unique_instances if num_unique_instances > 0 else 0.0
         
         if return_dict:
             return {
@@ -220,6 +226,7 @@ class BiomniRewardManager:
                     "mean_num_iterations": mean_num_iterations,
                     "mean_all_failed": mean_all_failed,
                     "mean_all_succeeded": mean_all_succeeded,
+                    "pass_at_n_percentage": pass_at_n_percentage,
                     **flat_gt_reward_mean_per_task
                 }
             }
@@ -233,6 +240,7 @@ class BiomniRewardManager:
             "mean_num_iterations": mean_num_iterations,
             "mean_all_failed": mean_all_failed,
             "mean_all_succeeded": mean_all_succeeded,
+            "pass_at_n_percentage": pass_at_n_percentage,
             **flat_gt_reward_mean_per_task,
         }
         # Add per-trajectory formatting rewards to metrics for filtering
@@ -242,6 +250,7 @@ class BiomniRewardManager:
         print(f"  - Mean iterations per trajectory: {mean_num_iterations:.2f}")
         print(f"  - Proportion of instances where all rollouts failed: {mean_all_failed:.2%}")
         print(f"  - Proportion of instances where all rollouts succeeded: {mean_all_succeeded:.2%}")
+        print(f"  - Pass@n percentage (at least one rollout succeeded): {pass_at_n_percentage:.2%}")
         print(f"  - Number of unique instances: {len(instance_to_rewards)}")
         print(f"  - Total trajectories: {len(gt_rewards)}")
         first_tokens = [reward_tensor_dict["all"][i][valid_len[i] - 1] for i in range(len(valid_len))]

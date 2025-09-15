@@ -26,11 +26,11 @@ CKPT_PATH='/dfs/scratch1/lansong/models/qwen'
 RUNTIME_URL='http://172.24.75.90:8000'    # ampere9
 TASK_TYPE='biomni'
 
-BATCH_SIZE=32
-MAX_NUM_ITERS=64
+BATCH_SIZE=64
+MAX_NUM_ITERS=48
 NUM_TRAJ=8
 MAX_PARALLEL_AGENTS=256
-SAVE_FREQ=1
+SAVE_FREQ=2
 
 # turn off KL loss for DAPO and DRGRPO
 USE_KL_LOSS=False
@@ -58,7 +58,7 @@ PYTHONUNBUFFERED=1 HOME=/dfs/scratch1/lansong uv run --env-file /dfs/scratch1/la
     data.train_files=["$TRAIN_FILE"] \
     data.val_files=["$VAL_FILE"] \
     data.train_batch_size=$BATCH_SIZE \
-    data.max_prompt_length=61440 \
+    data.max_prompt_length=49152 \
     data.max_response_length=4096 \
     data.truncation='error' \
     data.shuffle=True \
@@ -87,7 +87,7 @@ PYTHONUNBUFFERED=1 HOME=/dfs/scratch1/lansong uv run --env-file /dfs/scratch1/la
     actor_rollout_ref.rollout.name=async \
     actor_rollout_ref.rollout.task_type=$TASK_TYPE \
     +actor_rollout_ref.rollout.runtime_url=$RUNTIME_URL \
-    '+actor_rollout_ref.rollout.json_override_args="{\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":2.0,\"original_max_position_embeddings\":32768},\"max_position_embeddings\":65536}"' \
+    '+actor_rollout_ref.rollout.json_override_args="{\"rope_scaling\":{\"rope_type\":\"yarn\",\"factor\":2.0,\"original_max_position_embeddings\":32768},\"max_position_embeddings\":53248}"' \
     +actor_rollout_ref.filter_overlong_invalid_trajectories=True \
     +actor_rollout_ref.overlong_trajectory_threshold=32768 \
     actor_rollout_ref.rollout.gpu_memory_utilization=$GPU_MEM_UTIL \
@@ -120,4 +120,4 @@ PYTHONUNBUFFERED=1 HOME=/dfs/scratch1/lansong uv run --env-file /dfs/scratch1/la
     data.dataloader_num_workers=0 \
     actor_rollout_ref.exchange_size=500000000 \
     trainer.test_freq=-1 \
-    trainer.total_epochs=1 $@
+    trainer.total_epochs=2 $@

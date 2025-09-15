@@ -22,8 +22,8 @@ TRAIN_FILE='/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all/
 VAL_FILE='/dfs/scratch1/lansong/BioAgentOS/biomni_env_screen/data/rl_data/all/val.parquet'
 SFT_MODEL_PATH='/dfs/scratch1/lansong/models/qwen/qwen3-8b-sft-full-v1/global_step_208' 
 CKPT_PATH='/dfs/scratch1/lansong/models/qwen'
-RUNTIME_URL='http://172.24.75.232:8000'   # ampere7
-# RUNTIME_URL='http://172.24.75.90:8000'    # ampere9
+# RUNTIME_URL='http://172.24.75.232:8000'   # ampere7
+RUNTIME_URL='http://172.24.75.90:8000'    # ampere9
 TASK_TYPE='biomni'
 
 BATCH_SIZE=32
@@ -46,7 +46,7 @@ CLIP_RATIO_HIGH=0.28
 GPU_MEM_UTIL=0.8
 TP_SIZE=2
 NNODES=1
-SP_SIZE=2
+SP_SIZE=4
 
 
 TEMPERATURE=0.6

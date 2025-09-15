@@ -16,7 +16,7 @@
 set -uo pipefail
 
 # Default checkpoint path (edit if you move checkpoints)
-DEFAULT_CKPT=/dfs/scratch1/lansong/models/qwen/biomni-training-qwen3-32b-grpo/biomni-training-qwen3-32b-32bsz-temp0.6-clip-0.28-32turn-grpo/global_step_88
+DEFAULT_CKPT=/dfs/scratch1/lansong/models/qwen/biomni-training-qwen3-32b-grpo/biomni-training-qwen3-32b-32bsz-temp0.6-clip-0.28-64turn-rope-drgrpo/global_step_68
 
 # Parse first argument to determine mode
 RESUME_MODE=""
